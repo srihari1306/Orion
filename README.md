@@ -37,68 +37,22 @@ For cases that fall outside policy (high-value refunds, suspected abuse, complia
 
 ---
 
-## Architecture
+## Agent Pipeline (LangGraph)
 
-```mermaid
-flowchart TD
-    %% Base Layout Config
-    classDef default fill:#1e1e1e,stroke:#333,stroke-width:1px,color:#fff;
-    classDef highlight fill:#2563eb,stroke:#3b82f6,color:#fff;
-    classDef db fill:#047857,stroke:#10b981,color:#fff;
+The Orion agent is a **compiled LangGraph state machine** with five sequential nodes. Each node enriches a shared `AgentState` TypedDict and is protected by the resilience layer.
 
-    %% Frontend Layer
-    subgraph Frontend [FRONTEND - React + Vite]
-        direction LR
-        CC[Customer Chat]
-        AD[Agent Dashboard]
-        MP[Manager Portal]
-        AP[Admin Panel]
-    end
-
-    %% Backend Layer
-    subgraph Backend [BACKEND - FastAPI + Socket.IO]
-        direction TB
-        
-        subgraph Routers [API Routers]
-            direction LR
-            Auth[Auth]
-            Tickets[Tickets]
-            Chat[Chat]
-            Approve[Approve]
-            Admin[Admin]
-            Orders[Orders]
-            Metrics[Metrics]
-        end
-
-        subgraph Pipeline [LangGraph Agent Pipeline]
-            direction LR
-            T[Triage] --> C[Context] --> D[Decision] --> A[Action] --> R[Reply]
-        end
-        
-        subgraph Resilience [Resilience Layer]
-            direction LR
-            retry[@with_retry] --> breaker[CircuitBreaker] --> timeout[with_timeout] --> fallback[fallbacks]
-        end
-    end
-
-    %% Infrastructure
-    subgraph Infrastructure [Infrastructure]
-        direction LR
-        Groq[Groq Llama 3.3]:::highlight
-        MySQL[(MySQL 8.0)]:::db
-    end
-
-    %% Connections
-    Frontend <-->|HTTP REST + JWT| Routers
-    Frontend <-->|WebSocket| Chat
-    Chat -->|30s Timeout Safety Net| Pipeline
-    T & D & R -->|Protected by| Resilience
-    Resilience -->|API Request| Groq
-    C & A <-->|ORM Queries| MySQL
-    Routers <-->|Direct Queries| MySQL
+```text
+┌──────────────┐   ┌────────────┐   ┌──────────────┐   ┌────────────┐   ┌──────────────┐
+│    TRIAGE    │──→│  CONTEXT   │──→│   DECISION   │──→│   ACTION   │──→│    REPLY     │──→ END
+│              │   │            │   │              │   │            │   │              │
+│ • Intent     │   │ • CRM      │   │ • Policy     │   │ • Refund   │   │ • Draft      │
+│ • Sentiment  │   │ • Orders   │   │ • Guards     │   │ • Credit   │   │ • Persist    │
+│ • Urgency    │   │ • Billing  │   │ • LLM Eval   │   │ • Replace  │   │ • Close      │
+│              │   │            │   │              │   │            │   │              │
+│ [Fallback:   │   │ [No LLM,   │   │ [Fallback:   │   │ [Pre-exec  │   │ [Fallback:   │
+│  Keywords]   │   │  DB only]  │   │  handoff]    │   │  validate] │   │  Templates]  │
+└──────────────┘   └────────────┘   └──────────────┘   └────────────┘   └──────────────┘
 ```
-
----
 
 ## Production Resilience
 
@@ -289,26 +243,6 @@ Navigate to **[http://localhost:5173](http://localhost:5173)**
 
 ---
 
-## Agent Pipeline (LangGraph)
-
-The Orion agent is a **compiled LangGraph state machine** with five sequential nodes. Each node enriches a shared `AgentState` TypedDict and is protected by the resilience layer.
-
-```
-┌──────────────┐    ┌──────────┐    ┌──────────────┐    ┌──────────┐    ┌──────────────┐
-│    TRIAGE    │───→│ CONTEXT  │───→│   DECISION   │──┬→│  ACTION  │───→│    REPLY     │───→ END
-│              │    │          │    │              │  │ │          │    │              │
-│ • Intent    │    │ • CRM    │    │ • Policy     │  │ │ • Refund │    │ • Draft      │
-│ • Sentiment │    │ • Orders │    │ • Guards     │  │ │ • Credit │    │ • Persist    │
-│ • Urgency   │    │ • Billing│    │ • LLM        │  │ │ • Replace│    │ • Update     │
-│ • Entities  │    │ • Ship   │    │ • Safety     │  │ │ • Reroute│    │ • Close      │
-│             │    │          │    │              │  │ │          │    │              │
-│ Fallback:│    │ No LLM   │    │ Fallback: │  │ │ Pre-exec │    │ Fallback: │
-│ Keywords    │    │ (DB only)│    │ → handoff    │  │ │ validate │    │ Templates   │
-└──────────────┘    └──────────┘    └──────────────┘  │ └──────────┘    └──────────────┘
-                                                      │
-                                            Conditional routing
-                                            (always → action)
-```
 
 ### Policy Engine Rules
 
