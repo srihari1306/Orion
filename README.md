@@ -39,45 +39,63 @@ For cases that fall outside policy (high-value refunds, suspected abuse, complia
 
 ## Architecture
 
-```
-                    ┌─────────────────────────────────────────────────────────┐
-                    │                 FRONTEND (React + Vite)                 │
-                    │                                                         │
-                    │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐   │
-                    │  │ Customer │ │  Agent   │ │ Manager  │ │  Admin   │   │
-                    │  │  Chat    │ │Dashboard │ │ Portal   │ │  Panel   │   │
-                    │  └────┬─────┘ └────┬─────┘ └────┬─────┘ └────┬─────┘   │
-                    └───────┼────────────┼────────────┼────────────┼──────────┘
-                            │            │            │            │
-                      HTTP + Socket.IO (WebSocket)    │     JWT + RBAC
-                            │            │            │            │
-┌───────────────────────────┼────────────┼────────────┼────────────┼──────────┐
-│                     BACKEND (FastAPI + Socket.IO)                           │
-│                                                                             │
-│  ┌──────┐ ┌───────┐ ┌────┐ ┌───────┐ ┌─────┐ ┌──────┐ ┌─────────┐        │
-│  │ Auth │ │Tickets│ │Chat│ │Approve│ │Admin│ │Orders│ │ Metrics │        │
-│  └──┬───┘ └───┬───┘ └─┬──┘ └───┬───┘ └──┬──┘ └──┬───┘ └────┬────┘        │
-│     │         │       │        │        │       │           │              │
-│     │         │  ┌────▼────────────────────────────┐       │              │
-│     │         │  │   LANGGRAPH AGENT PIPELINE      │       │              │
-│     │         │  │   (30s timeout safety net)      │       │              │
-│     │         │  │                                  │       │              │
-│     │         │  │  Triage → Context → Decision     │       │              │
-│     │         │  │           → Action → Reply       │       │              │
-│     │         │  │                                  │       │              │
-│     │         │  │  Each LLM node:                  │       │              │
-│     │         │  │  retry(3x) → breaker → fallback  │       │              │
-│     │         │  └────┬──────────────────┬──────────┘       │              │
-│     │         │       │                  │                  │              │
-│     │         │  ┌────▼─────┐     ┌──────▼──────┐          │              │
-│     │         │  │   Groq   │     │   MySQL DB  │          │              │
-│     │         │  │ Llama 3.3│     │  (Real data)│          │              │
-│     │         │  └──────────┘     └─────────────┘          │              │
-│  ┌──┴─────────┴─────────────────────────────────────────────┴──┐           │
-│  │                   RESILIENCE LAYER                          │           │
-│  │  CircuitBreaker ← with_retry ← with_timeout ← fallbacks   │           │
-│  └─────────────────────────────────────────────────────────────┘           │
-└───────────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    %% Base Layout Config
+    classDef default fill:#1e1e1e,stroke:#333,stroke-width:1px,color:#fff;
+    classDef highlight fill:#2563eb,stroke:#3b82f6,color:#fff;
+    classDef db fill:#047857,stroke:#10b981,color:#fff;
+
+    %% Frontend Layer
+    subgraph Frontend [FRONTEND - React + Vite]
+        direction LR
+        CC[Customer Chat]
+        AD[Agent Dashboard]
+        MP[Manager Portal]
+        AP[Admin Panel]
+    end
+
+    %% Backend Layer
+    subgraph Backend [BACKEND - FastAPI + Socket.IO]
+        direction TB
+        
+        subgraph Routers [API Routers]
+            direction LR
+            Auth[Auth]
+            Tickets[Tickets]
+            Chat[Chat]
+            Approve[Approve]
+            Admin[Admin]
+            Orders[Orders]
+            Metrics[Metrics]
+        end
+
+        subgraph Pipeline [LangGraph Agent Pipeline]
+            direction LR
+            T[Triage] --> C[Context] --> D[Decision] --> A[Action] --> R[Reply]
+        end
+        
+        subgraph Resilience [Resilience Layer]
+            direction LR
+            retry[@with_retry] --> breaker[CircuitBreaker] --> timeout[with_timeout] --> fallback[fallbacks]
+        end
+    end
+
+    %% Infrastructure
+    subgraph Infrastructure [Infrastructure]
+        direction LR
+        Groq[Groq Llama 3.3]:::highlight
+        MySQL[(MySQL 8.0)]:::db
+    end
+
+    %% Connections
+    Frontend <-->|HTTP REST + JWT| Routers
+    Frontend <-->|WebSocket| Chat
+    Chat -->|30s Timeout Safety Net| Pipeline
+    T & D & R -->|Protected by| Resilience
+    Resilience -->|API Request| Groq
+    C & A <-->|ORM Queries| MySQL
+    Routers <-->|Direct Queries| MySQL
 ```
 
 ---
